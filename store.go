@@ -5,29 +5,33 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 )
 
-// GlobalStore holds the global store values
-var GlobalStore = make(map[string]string)
+// Assuming a global mutex for GlobalStore
+var globalStoreMu sync.Mutex
 
-// store is map of string:string
-type store = map[string]string
+// GlobalStore holds the global store values
+var GlobalStore sync.Map
 
 // Tx points to a key:value store
 type Tx struct {
 	next  *Tx
-	store store // every transaction will have its local store
+	store sync.Map // Directly use sync.Map
 }
 
 // TxStack is a list of active and closed transactions
 type TxStack struct {
 	top  *Tx
 	size int
+	mu   sync.Mutex // Protects the TxStack
 }
 
 // Push creates a new active transaction
 func (ts *TxStack) Push() {
-	temp := Tx{store: make(store)}
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	temp := Tx{}
 	temp.next = ts.top
 	ts.top = &temp
 	ts.size++
@@ -35,6 +39,8 @@ func (ts *TxStack) Push() {
 
 // Pop deletes a transaction from stack
 func (ts *TxStack) Pop() {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
 	// Pop the transaction from stack
 	if ts.top == nil {
 		fmt.Println("No Active Transactions")
@@ -46,15 +52,18 @@ func (ts *TxStack) Pop() {
 
 // Commit writes changes to the store within TxStack
 func (ts *TxStack) Commit() {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+
 	activeTx := ts.Peek()
 	if activeTx != nil {
-		for key, val := range activeTx.store {
-			GlobalStore[key] = val
+		activeTx.store.Range(func(key, value interface{}) bool { // correct use of Range
+			GlobalStore.Store(key, value)
 			if activeTx.next != nil {
-				// update the parent transaction
-				activeTx.next.store[key] = val
+				activeTx.next.store.Store(key, value)
 			}
-		}
+			return true // Continue iterating
+		})
 	} else {
 		fmt.Println("Nothing to commit")
 	}
@@ -69,13 +78,13 @@ func (ts *TxStack) Peek() *Tx {
 func Get(key string, txStack *TxStack) {
 	activeTx := txStack.Peek()
 	if activeTx == nil {
-		if val, ok := GlobalStore[key]; ok {
+		if val, ok := GlobalStore.Load(key); ok {
 			fmt.Println(val)
 		} else {
 			fmt.Println(key, "not set")
 		}
 	} else {
-		if val, ok := activeTx.store[key]; ok {
+		if val, ok := activeTx.store.Load(key); ok {
 			fmt.Println(val)
 		} else {
 			fmt.Printf("Key not found %s\n", key)
@@ -87,9 +96,9 @@ func Get(key string, txStack *TxStack) {
 func Set(key string, value string, txStack *TxStack) {
 	activeTx := txStack.Peek()
 	if activeTx == nil {
-		GlobalStore[key] = value
+		GlobalStore.Store(key, value) // correct use of Store
 	} else {
-		activeTx.store[key] = value
+		activeTx.store.Store(key, value) // correct use of Store
 	}
 }
 
@@ -97,15 +106,11 @@ func Set(key string, value string, txStack *TxStack) {
 func Delete(key string, txStack *TxStack) {
 	activeTx := txStack.Peek()
 	if activeTx == nil {
-		delete(GlobalStore, key)
+		GlobalStore.Delete(key) // correct use of Delete
 	} else {
-		delete(activeTx.store, key)
-		for activeTx.next != nil {
-			delete(activeTx.next.store, key)
-			activeTx = activeTx.next
-			if activeTx.next == nil {
-				break
-			}
+		// ... delete from activeTx and possibly parent transactions
+		for tx := activeTx; tx != nil; tx = tx.next {
+			tx.store.Delete(key) // correct use of Delete
 		}
 	}
 }
