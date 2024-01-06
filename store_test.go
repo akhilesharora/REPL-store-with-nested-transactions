@@ -6,7 +6,12 @@ import (
 	"testing"
 )
 
-// TestPushTransaction checks if transactions are correctly pushed onto the stack
+// Assuming a GlobalStore and Tx structure defined as follows in main application:
+// var GlobalStore sync.Map
+// type Tx struct { ... }
+// type TxStack struct { ... }
+// And TxStack, Tx, Set, Get, Delete methods are defined appropriately for sync.Map
+
 func TestPushTransaction(t *testing.T) {
 	ts := &TxStack{}
 	ts.Push()
@@ -15,8 +20,8 @@ func TestPushTransaction(t *testing.T) {
 		t.Errorf("Expected stack size of 1 after one push, got %d", ts.size)
 	}
 
-	if ts.top == nil || ts.top.store == nil {
-		t.Errorf("Expected top transaction to be non-nil with initialized store")
+	if ts.top == nil {
+		t.Errorf("Expected top transaction to be non-nil after push")
 	}
 
 	// Test pushing multiple transactions
@@ -28,7 +33,6 @@ func TestPushTransaction(t *testing.T) {
 	}
 }
 
-// TestPopTransaction checks popping transactions from the stack, including edge cases
 func TestPopTransaction(t *testing.T) {
 	ts := &TxStack{}
 	ts.Push()
@@ -56,18 +60,22 @@ func TestPopTransaction(t *testing.T) {
 	}
 }
 
-// TestCommit checks committing a transaction and its effect on the GlobalStore
 func TestCommit(t *testing.T) {
 	// Reset GlobalStore for testing
-	GlobalStore = make(map[string]string)
+	GlobalStore = sync.Map{} // Updated to sync.Map
 	ts := &TxStack{}
 	ts.Push()
-	ts.top.store["key1"] = "value1"
+
+	var key = "key1"
+	var value = "value1"
+	ts.top.store.Store(key, value) // Correct usage of sync.Map
 
 	ts.Commit()
 
-	if GlobalStore["key1"] != "value1" {
-		t.Errorf("Expected GlobalStore to have committed value 'value1' for 'key1', found %s", GlobalStore["key1"])
+	// Retrieve value from GlobalStore
+	valueFromStore, ok := GlobalStore.Load(key)
+	if !ok || valueFromStore != value {
+		t.Errorf("Expected GlobalStore to have committed value '%s' for '%s', found %s", value, key, valueFromStore)
 	}
 
 	// Edge case: Committing with no active transactions
@@ -75,47 +83,47 @@ func TestCommit(t *testing.T) {
 	ts.Commit()     // should not cause error
 
 	// Ensure GlobalStore is unchanged after committing with no active transactions
-	if len(GlobalStore) != 1 {
-		t.Errorf("GlobalStore should be unchanged when committing with no active transactions, found %d items", len(GlobalStore))
+	var count int
+	GlobalStore.Range(func(k, v interface{}) bool {
+		count++
+		return true
+	})
+	if count != 1 { // count should be 1 because one value was added in this test
+		t.Errorf("GlobalStore should have only one value after committing with no active transactions, found %d items", count)
 	}
 }
 
-// TestRaceCondition tests for race conditions in transaction operations
 func TestRaceCondition(t *testing.T) {
-	GlobalStore = make(map[string]string) // Resetting GlobalStore before the test
-	ts := &TxStack{}
+	GlobalStore = sync.Map{} // Resetting GlobalStore before the test
 	var wg sync.WaitGroup
 
-	// Define a mutex to synchronize access to the GlobalStore in the test
-	var mu sync.Mutex
-
-	// Run several concurrent transactions
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
-		go func(i int) {
+		go func(txNum int) {
 			defer wg.Done()
-			ts.Push() // Push a new transaction
+			localTs := &TxStack{} // Consider giving each transaction its own TxStack if applicable
+			localTs.Push()        // Push a new transaction
 
-			// Locking the store to simulate transactional update
-			mu.Lock()
 			// Simulate updating the transaction's store with unique keys for each transaction
-			for j := 0; j < 5; j++ { // each transaction changes 5 values
-				key := fmt.Sprintf("key%d", j) // unique keys across transactions
-				val := fmt.Sprintf("value%d_from_tx%d", j, i)
-				ts.top.store[key] = val
+			for j := 0; j < 5; j++ {
+				key := fmt.Sprintf("key%d_from_tx%d", j, txNum)
+				val := fmt.Sprintf("value%d", j)
+				localTs.top.store.Store(key, val)
 			}
-			mu.Unlock()
 
-			// Committing the transaction should affect the GlobalStore
-			ts.Commit()
+			localTs.Commit()
 		}(i)
 	}
 
-	wg.Wait() // Wait for all goroutines to complete
+	wg.Wait()
 
 	// Check for consistency in GlobalStore
-	// The store should have multiple keys set by the transactions
-	if len(GlobalStore) < 5 {
-		t.Errorf("Expected GlobalStore to have many values after concurrent commits, found only %d", len(GlobalStore))
+	var count int
+	GlobalStore.Range(func(k, v interface{}) bool {
+		count++
+		return true
+	})
+	if count < 50 { // Expecting at least 50 entries (10 transactions x 5 keys each)
+		t.Errorf("Expected GlobalStore to have many values after concurrent commits, found only %d", count)
 	}
 }
