@@ -46,5 +46,4 @@ Exiting...
 ## OTHER DETAILS
 * All commands are case-insensitive
 > Note: For simplicity: Few things are left for the next iteration
-* `Mutexs/Locks` have been not implemented 
-* testing `REPL` not implemented
+
